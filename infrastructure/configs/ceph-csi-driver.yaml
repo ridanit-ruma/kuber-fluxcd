@@ -1,0 +1,19 @@
+# Rook 1.20 hands CSI off to ceph-csi-operator, and that operator splits the
+# work in two: Rook writes the cluster-specific half (a CephConnection, a
+# ClientProfile, the keyrings, the StorageClass), and the Driver below is the
+# half the administrator declares -- "deploy this CSI driver".
+#
+# Without it there is no failure anywhere. The CephCluster reports Ready, the
+# StorageClass exists and names this provisioner, and every PVC against it
+# simply stays Pending, because nothing is running to answer.
+#
+# The name is not free-form: ceph-csi-operator derives the driver it deploys
+# from it, and it has to equal the StorageClass provisioner exactly, which
+# Rook sets to <namespace>.rbd.csi.ceph.com.
+---
+apiVersion: csi.ceph.io/v1
+kind: Driver
+metadata:
+  name: rook-ceph.rbd.csi.ceph.com
+  namespace: rook-ceph
+spec: {}

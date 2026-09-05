@@ -1,0 +1,81 @@
+# Kubernetes ships no approver for the kubelet-serving signer --
+# kube-controller-manager auto-approves the client signer and nothing else --
+# so a kubelet asking for a serving certificate waits forever, the API server
+# cannot verify it, and `kubectl logs` and `kubectl exec` fail cluster-wide
+# with `tls: internal error`.
+#
+# Until now that was handled by a blanket approval in the NixOS config, which
+# is only defensible while one node exists and is its own sole requestor. This
+# controller checks what was actually asked for against the node that asked,
+# so a second node cannot mint a certificate for the first one's name.
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: postfinance
+  namespace: flux-system
+spec:
+  interval: 12h
+  url: https://postfinance.github.io/kubelet-csr-approver
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: kubelet-csr-approver
+  namespace: kube-system
+spec:
+  interval: 1h
+  chart:
+    spec:
+      chart: kubelet-csr-approver
+      version: "1.2.14"
+      sourceRef:
+        kind: HelmRepository
+        name: postfinance
+        namespace: flux-system
+  install:
+    remediation:
+      retries: 3
+  upgrade:
+    remediation:
+      retries: 3
+  values:
+    # These machines have no DNS records -- they are named in
+    # networking.hosts, not in a zone -- so the forward/reverse lookup the
+    # approver does by default would reject every request. The two checks
+    # below are what actually constrains it instead.
+    bypassDnsResolution: true
+
+    # A node may only be called something that looks like these hostnames.
+    providerRegex: "^[a-z0-9][a-z0-9-]{0,30}$"
+
+    # And may only claim an address on one of these. This is the meaningful
+    # limit: a certificate for anything off-segment is refused outright.
+    #
+    # Both segments are listed because a node has a leg on each: the router
+    # LAN carries ingress, SSH and the API server, and the switch carries the
+    # cluster fabric -- pod traffic, Ceph replication, etcd and BGP. The node
+    # InternalIP lives on the second one, so that is the address the kubelet
+    # actually asks for.
+    #
+    # This list has to be widened BEFORE a node moves onto a new segment. The
+    # approver denies what it does not recognise, and a denied CSR cannot be
+    # approved afterwards -- the kubelet has to be made to ask again.
+    # Both subnets from hosts/cluster.nix in kuber-nixos-flakes. A kubelet
+    # asking for a certificate for an address outside them is denied.
+    providerIpPrefixes:
+      - 192.168.1.0/24 # LAN -- router, ssh, the API server
+      - 10.10.0.0/24 # fabric -- pods, Ceph, etcd
+
+    # One node today, and leader election makes a second replica idle rather
+    # than useful. Raise this once there is somewhere else to run it.
+    replicas: 1
+
+    # A year is the kubelet default; shortening it means a compromised
+    # certificate expires sooner, and renewal is automatic either way.
+    #
+    # Quoted deliberately. Helm round-trips values through JSON, where an
+    # unquoted integer this size comes back out as 7.776e+06 and the flag
+    # parser rejects it -- which is why the chart default is an empty string
+    # rather than a number.
+    maxExpirationSeconds: "7776000" # 90 days

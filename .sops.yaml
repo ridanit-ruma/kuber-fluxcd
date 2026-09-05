@@ -1,0 +1,16 @@
+# Files matching *.sops.yaml are encrypted for the cluster age key.
+# Only the values under data/stringData are encrypted, so the surrounding
+# Kubernetes manifest stays readable in review and in git history.
+#
+# Replace the recipient below with your own, from `age-keygen`. The private
+# half goes into the cluster as the `sops-age` secret in flux-system and
+# nowhere else:
+#
+#     age-keygen -o age.agekey
+#     kubectl -n flux-system create secret generic sops-age \
+#       --from-file=age.agekey=age.agekey
+#
+creation_rules:
+  - path_regex: \.sops\.ya?ml$
+    encrypted_regex: ^(data|stringData)$
+    age: age1REPLACE0THIS0WITH0YOUR0OWN0AGE0PUBLIC0KEY0000000000000000

@@ -1,0 +1,36 @@
+apiVersion: cilium.io/v2
+kind: CiliumLoadBalancerIPPool
+metadata:
+  name: lan-pool
+spec:
+  # A block that belongs to nobody on the LAN, on purpose. Carving addresses
+  # out of 192.168.1.0/24 would look tidier and cannot work: something has
+  # to answer ARP for an address inside that subnet and nothing here does.
+  # Making one answer is what L2 announcements are for, and those require
+  # kubeProxyReplacement, which this cluster deliberately does not run. A
+  # block that sits outside every local subnet is reached by a route instead,
+  # and a route needs no announcement.
+  #
+  # The route itself lives off-cluster -- on the household gateway if it will
+  # take one, otherwise on each machine that wants in:
+  #
+  #     10.10.1.0/24 via 192.168.1.100
+  #
+  # Any node address works as the next hop; kube-proxy on whichever node
+  # receives the packet forwards it to the backing pod wherever it runs. The
+  # cost of naming one is that losing that node takes the path down with it.
+  # Replacing this line with BGP is what removes that, and nothing in this
+  # file changes when it does.
+  #
+  # Clear of every range in use: 192.168.1.0/24 LAN, 10.10.0.0/24 fabric,
+  # 10.244.0.0/16 pods, 10.96.0.0/12 services.
+  blocks:
+    - cidr: 10.10.1.0/24
+
+  # Opt-in. An address out of this block is routable from the LAN, so a
+  # service should ask for that rather than acquire it by happening to be
+  # type: LoadBalancer. A service without the label stays <pending>, which is
+  # the intended answer to an unlabelled request and not a fault to debug.
+  serviceSelector:
+    matchLabels:
+      expose-on-lan: "true"

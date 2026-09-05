@@ -1,0 +1,140 @@
+# Replaces ingress-nginx, which reached end of life in March 2026.
+#
+# What this cluster actually needs from an ingress controller is narrow: split
+# HTTP by hostname, inside the cluster. TLS ends at the Cloudflare edge and
+# cloudflared reaches the controller by service name, so there is no
+# certificate handling here and nothing listening on a node port. That rules a
+# lot of complexity out.
+#
+# It also carries a LAN address, so the same routes answer from inside the
+# house without a round trip out to Cloudflare and back. That address comes
+# from infrastructure/configs/cilium-lb-ippool.yaml and is reached by a route
+# on the client side, not by anything the controller announces.
+#
+# Traefik over the alternatives because it speaks plain Ingress: the resources
+# in apps/ and the rules in GUIDELINE.md carry over with a class name changed.
+# Envoy Gateway would have meant rewriting every route as an HTTPRoute, and
+# Cilium's built-in ingress wants kubeProxyReplacement, which this cluster
+# deliberately does without.
+#
+# It also drops the piece of ingress-nginx that kept appearing in advisories:
+# there is no admission webhook here, and no Lua.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: traefik
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: traefik
+  namespace: traefik
+spec:
+  interval: 1h
+  chart:
+    spec:
+      chart: traefik
+      version: "41.4.0"
+      sourceRef:
+        kind: HelmRepository
+        name: traefik
+        namespace: flux-system
+  install:
+    remediation:
+      retries: 3
+  upgrade:
+    remediation:
+      retries: 3
+  values:
+    deployment:
+      replicas: 2
+
+    accessLog:
+      enabled: true
+      format: json
+      fields:
+        headers:
+          names:
+            Cf-Connecting-Ip: keep
+            User-Agent: keep
+
+    service:
+      # lan-pool only serves services carrying this label. It is the whole
+      # opt-in: drop the label and the address goes away, whatever the type
+      # says.
+      labels:
+        expose-on-lan: "true"
+
+      annotations:
+        # Pinned rather than taken from whatever the pool has free. This
+        # address goes into a route on every client that wants in, and later
+        # into DNS, so it must not move because the service was recreated.
+        lbipam.cilium.io/ips: "10.10.1.1"
+
+      spec:
+        # A LAN address in addition to the cluster one, not instead of it.
+        # cloudflared still reaches this by name from inside the cluster and
+        # the public path through the tunnel is untouched.
+        #
+        # Until a route points 10.10.1.0/24 at a node, the address is assigned
+        # and unreachable, and that is the expected intermediate state.
+        type: LoadBalancer
+
+    ports:
+      web:
+        expose:
+          default: true
+        exposedPort: 80
+      websecure:
+        # No TLS here. Cloudflare terminates it at the edge and the tunnel
+        # carries plain HTTP the rest of the way, so a 443 listener would only
+        # be a second door onto the same thing.
+        expose:
+          default: false
+      traefik:
+        # The dashboard and ping port stay off the service entirely.
+        expose:
+          default: false
+
+    providers:
+      kubernetesIngress:
+        enabled: true
+      kubernetesCRD:
+        # On since apps/stitch-gateway, which needs a basic-auth Middleware.
+        # Attaching one to an Ingress is the only way Traefik v3 offers to put
+        # authentication in front of a backend that has none of its own, and a
+        # Middleware is a CRD, so this provider has to be watching.
+        #
+        # It was off for a reason and the reason still holds: this grants
+        # cluster-wide watch on the traefik.io kinds. That was not worth
+        # paying while nothing created them. It is worth paying to keep an
+        # unauthenticated key-management API off the open internet.
+        enabled: true
+
+    ingressClass:
+      enabled: true
+      name: traefik
+      # The default, so an Ingress that names no class still gets served.
+      # Only one class can hold this -- while ingress-nginx was still
+      # installed it did, because two defaults is an argument the API server
+      # settles unpredictably.
+      isDefaultClass: true
+
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        memory: 512Mi
+
+    topologySpreadConstraints:
+      # One per node while there are two. ScheduleAnyway rather than
+      # DoNotSchedule so losing a node does not also block the replacement pod
+      # from starting on the survivor.
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: traefik

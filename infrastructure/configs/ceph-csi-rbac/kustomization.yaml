@@ -1,0 +1,21 @@
+# csi-rbac.yaml is vendored byte-identical from
+#   github.com/ceph/ceph-csi-operator, tag v1.0.4, deploy/multifile/csi-rbac.yaml
+# which is the version the rook-ceph chart deploys. Keep it unmodified so a
+# diff against upstream stays meaningful on the next operator bump; everything
+# this cluster needs to change is expressed below instead.
+#
+# The ServiceAccounts the CSI plugin pods run as are not created by the
+# rook-ceph chart or by its ceph-csi-operator subchart -- neither renders them.
+# Without them the operator builds a Deployment and a DaemonSet that reference
+# accounts that do not exist, both stay at zero pods, and the only place it is
+# reported is a FailedCreate event on the ReplicaSet.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Upstream hardcodes ceph-csi-operator-system in 34 places. The operator runs
+# in rook-ceph here, so rewrite it -- this also fixes the subject namespace in
+# every RoleBinding and ClusterRoleBinding.
+namespace: rook-ceph
+
+resources:
+  - csi-rbac.yaml

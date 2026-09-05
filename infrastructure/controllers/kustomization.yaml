@@ -1,0 +1,10 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - sources.yaml
+  - cilium.yaml
+  - cilium-kubelet-probes.yaml
+  - cert-manager.yaml
+  - kubelet-csr-approver.yaml
+  - traefik.yaml
+  - rook-ceph-operator.yaml

@@ -1,0 +1,99 @@
+# Cilium is installed before Flux exists -- the cilium-bootstrap unit in the
+# NixOS config runs it, because Flux is pods and pods have no network until a
+# CNI is running. This adopts that release so its settings live in git from
+# here on; the unit stays as the bootstrap path and becomes a no-op once the
+# DaemonSet is present.
+#
+# The values started as exactly what cilium-cli set, read back from the
+# release, so that adoption itself changed nothing and could be verified on
+# its own. The datapath moved to native routing afterwards, as its own commit.
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: cilium
+  namespace: flux-system
+spec:
+  interval: 12h
+  url: https://helm.cilium.io
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: cilium
+  namespace: kube-system
+spec:
+  interval: 1h
+  # Same name and namespace as the existing release, which is what lets
+  # helm-controller pick it up instead of trying to install a second one.
+  releaseName: cilium
+  chart:
+    spec:
+      chart: cilium
+      version: "1.20.0"
+      sourceRef:
+        kind: HelmRepository
+        name: cilium
+        namespace: flux-system
+  install:
+    remediation:
+      retries: 3
+  upgrade:
+    remediation:
+      # Rolling back a CNI mid-failure is worse than leaving it in place: the
+      # rollback itself needs the network it is repairing.
+      retries: 2
+      remediateLastFailure: false
+  values:
+    # Kubernetes 모드의 기본 auto는 노드 로컬 트래픽을 우회 허용한다.
+    # sandbox namespace의 Cilium egressDeny가 host/노드 경로에도 적용되게 한다.
+    extraConfig:
+      allow-localhost: policy
+
+    # ConfigMap의 보안 설정이 바뀌면 각 agent Pod가 checksum으로 교체되어
+    # 다음 재시작까지 이전 allow-localhost 값이 남지 않게 한다.
+    rollOutCiliumPods: true
+
+    ipam:
+      # Cilium takes each node's PodCIDR from Kubernetes rather than handing
+      # out its own, so one prefix per node is what a BGP peer would announce.
+      mode: kubernetes
+
+    # Reaching the API server without going through kube-proxy, which matters
+    # while Cilium itself is starting.
+    k8sServiceHost: k8s-cp.cluster.lan # controlPlaneEndpoint from hosts/cluster.nix
+    k8sServicePort: 6443
+
+    operator:
+      # One node; the chart default of two would leave one Pending.
+      replicas: 1
+
+    bgpControlPlane:
+      # On with no peers. Adding a peer later is then a CRD, not a CNI change.
+      enabled: true
+
+    cluster:
+      name: kubernetes
+
+    # Native routing rather than VXLAN. Pod packets go on the wire as
+    # themselves instead of inside an encapsulation header, which is what
+    # makes a route learned over BGP mean anything -- with a tunnel, the
+    # advertisement is decoration and the traffic still goes through VXLAN.
+    # It also returns the 50 bytes of header to the MTU.
+    routingMode: native
+
+    # Traffic between pods must not be masqueraded, or the destination sees
+    # the node address and replies to the wrong place. This names the range
+    # that is routable as-is; kubeadm hands out node PodCIDRs from it.
+    ipv4NativeRoutingCIDR: 10.244.0.0/16
+
+    # Native routing on its own gives each node a route to its own pods and
+    # nothing else -- without this, a pod on one node cannot reach a pod on
+    # another. Cilium installs those routes itself from each node's PodCIDR,
+    # which works because every node sits on the same fabric switch and the
+    # node InternalIP is its address on it.
+    #
+    # BGP would be the other way to learn them, and is the right one once
+    # nodes are on separate segments or a router is involved. On one shared
+    # L2 this needs no peers and no configuration.
+    autoDirectNodeRoutes: true

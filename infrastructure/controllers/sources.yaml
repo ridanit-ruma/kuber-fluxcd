@@ -1,0 +1,29 @@
+# Upstream chart repositories. Kept in one file so every chart this cluster
+# pulls, and where it comes from, is visible in a single place.
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: jetstack
+  namespace: flux-system
+spec:
+  interval: 12h
+  url: https://charts.jetstack.io
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: rook-release
+  namespace: flux-system
+spec:
+  interval: 12h
+  url: https://charts.rook.io/release
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: traefik
+  namespace: flux-system
+spec:
+  interval: 12h
+  url: https://traefik.github.io/charts

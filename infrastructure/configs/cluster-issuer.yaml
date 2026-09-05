@@ -1,0 +1,49 @@
+# DNS-01 rather than HTTP-01, for two reasons: it issues wildcards, which
+# HTTP-01 cannot, and it never needs an inbound request, so a certificate can
+# be issued before the router forwards anything.
+#
+# No `email` is set. Let's Encrypt uses it only to warn about upcoming expiry,
+# and cert-manager renews on its own; setting it would publish an address to a
+# third party for no working benefit. Add one under `acme.email` if those
+# warnings are wanted as a backstop.
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    privateKeySecretRef:
+      name: letsencrypt-staging-account-key
+    solvers:
+      - dns01:
+          cloudflare:
+            apiTokenSecretRef:
+              name: cloudflare-api-token
+              key: api-token
+        selector:
+          dnsZones:
+            - example.com  # your zone, the one the Cloudflare token can edit
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+      - dns01:
+          cloudflare:
+            apiTokenSecretRef:
+              name: cloudflare-api-token
+              key: api-token
+        # Scoped to the one zone the token can reach. A request for any other
+        # name then fails on this selector instead of failing later inside
+        # Cloudflare with a permissions error that is harder to read.
+        selector:
+          dnsZones:
+            - example.com  # your zone, the one the Cloudflare token can edit

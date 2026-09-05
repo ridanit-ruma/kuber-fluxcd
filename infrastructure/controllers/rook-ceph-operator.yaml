@@ -1,0 +1,50 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rook-ceph
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: rook-ceph
+  namespace: rook-ceph
+spec:
+  interval: 1h
+  chart:
+    spec:
+      chart: rook-ceph
+      version: "v1.20.6"
+      sourceRef:
+        kind: HelmRepository
+        name: rook-release
+        namespace: flux-system
+  install:
+    remediation:
+      retries: 3
+    # The operator brings its own CRDs, and the CephCluster in ../configs is
+    # one of them. CreateReplace so a chart upgrade also updates them; plain
+    # Create installs them once and then never touches them again.
+    crds: CreateReplace
+  upgrade:
+    remediation:
+      retries: 3
+  values:
+    # Rook 1.20 does not deploy CSI itself; it installs ceph-csi-operator as a
+    # subchart and that operator deploys the drivers. The chart has no
+    # enableRBDDriver / enableCephfsDriver keys any more -- Helm accepts
+    # unknown values in silence, so setting them looks like it worked and does
+    # nothing. Which drivers exist is decided by the Driver resources in
+    # ../configs instead.
+    ceph-csi-operator:
+      controllerManager:
+        manager:
+          env:
+            # The operator looks up the plugin ServiceAccounts by
+            # <prefix>rbd-ctrlplugin-sa. Upstream ships them prefixed, the
+            # rook-ceph chart leaves this empty, and neither chart creates
+            # them -- so the accounts are vendored in ../configs/ceph-csi-rbac
+            # unmodified and the operator is pointed at their real names.
+            csiServiceAccountPrefix: "ceph-csi-operator-"
+    monitoring:
+      enabled: false

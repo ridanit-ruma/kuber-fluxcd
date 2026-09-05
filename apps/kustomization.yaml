@@ -1,0 +1,8 @@
+# One line per service, naming its directory.
+#
+# A service that is not listed here does not run, whatever its files say —
+# which is also how you take one down without deleting it.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - example-app

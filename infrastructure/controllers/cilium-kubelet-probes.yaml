@@ -1,0 +1,49 @@
+# allow-localhost=policy에서도 기존 워크로드의 kubelet 상태 검사를 허용한다.
+# host는 해당 Pod가 실행되는 로컬 노드이며 sandbox namespace는 선택하지 않는다.
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: allow-existing-kubelet-probes
+specs:
+  - endpointSelector:
+      matchLabels:
+        k8s:io.kubernetes.pod.namespace: flux-system
+        k8s:app.kubernetes.io/part-of: flux
+    ingress:
+      - fromEntities: [host]
+        toPorts:
+          - ports:
+              - port: "9440"
+                protocol: TCP
+  - endpointSelector:
+      matchLabels:
+        k8s:io.kubernetes.pod.namespace: flux-system
+        k8s:app: source-controller
+    ingress:
+      - fromEntities: [host]
+        toPorts:
+          - ports:
+              - port: "9090"
+                protocol: TCP
+  - endpointSelector:
+      matchLabels:
+        k8s:io.kubernetes.pod.namespace: kubitor
+        k8s:app.kubernetes.io/name: kubitor
+        k8s:app.kubernetes.io/component: client
+    ingress:
+      - fromEntities: [host]
+        toPorts:
+          - ports:
+              - port: "3000"
+                protocol: TCP
+  - endpointSelector:
+      matchLabels:
+        k8s:io.kubernetes.pod.namespace: kubitor
+        k8s:app.kubernetes.io/name: kubitor
+        k8s:app.kubernetes.io/component: server
+    ingress:
+      - fromEntities: [host]
+        toPorts:
+          - ports:
+              - port: "3001"
+                protocol: TCP

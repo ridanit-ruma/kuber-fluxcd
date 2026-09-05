@@ -1,0 +1,134 @@
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: rook-ceph-cluster
+  namespace: rook-ceph
+spec:
+  interval: 1h
+  chart:
+    spec:
+      chart: rook-ceph-cluster
+      version: "v1.20.6"
+      sourceRef:
+        kind: HelmRepository
+        name: rook-release
+        namespace: flux-system
+  dependsOn:
+    - name: rook-ceph
+      namespace: rook-ceph
+  install:
+    remediation:
+      retries: 3
+  upgrade:
+    remediation:
+      retries: 3
+  values:
+    operatorNamespace: rook-ceph
+    toolbox:
+      enabled: true
+    cephClusterSpec:
+      mon:
+        # Three, on three separate machines. The monitors are what knows which
+        # OSD holds what; lose their quorum and the cluster stops serving,
+        # however many copies of the data survive.
+        #
+        # It ran on one for a while, which meant losing that node took the storage
+        # down with it and made the pool's redundancy beside the point. Two
+        # would be worse than one -- a quorum of two needs both.
+        count: 3
+        allowMultiplePerNode: false
+      mgr:
+        # Two: one active, one standby. This is not a quorum like the monitors
+        # above -- the standby holds no vote and simply takes over, so two is
+        # strictly better than one and an even count costs nothing.
+        #
+        # A single mgr is not a data risk; the monitors keep the map and the
+        # OSDs keep the objects. What it costs is every mgr-served surface --
+        # the dashboard, `ceph -s` output that is not stale, the PG autoscaler
+        # and the CSI provisioner's view -- for as long as the deployment
+        # takes to reschedule after a node dies.
+        count: 2
+        # Both on one machine would restore exactly the gap this closes.
+        allowMultiplePerNode: false
+      dashboard:
+        enabled: true
+        ssl: false
+      storage:
+        # By fullpath, not by name. /dev/nvmeXn1 is assigned in whatever order
+        # the kernel enumerates the controllers, and it has already changed
+        # here: the OSD was created on what was then nvme0n1, and after a
+        # reboot that name belongs to the disk holding / and /boot. The
+        # configuration went on naming nvme0n1 and only Rook's refusal to
+        # touch a device carrying a partition table kept it from being read as
+        # an instruction to eat the system disk.
+        #
+        # /dev/disk/by-id is the serial number. It does not move.
+        useAllNodes: false
+        useAllDevices: false
+        nodes:
+          # One entry per machine, naming the disk by its serial rather than by
+          # `nvme0n1`. `install.sh` in kuber-nixos-flakes appends an entry here
+          # when it hands a new node's disk over.
+          #
+          # Replace these with your own — `ls -l /dev/disk/by-id/` on the node
+          # prints the serials, and the disk named here is erased.
+          - name: "example-worker-1"
+            devices:
+              - fullpath: /dev/disk/by-id/nvme-VENDOR_MODEL_SERIALNUMBER
+          - name: "example-worker-2"
+            devices:
+              - fullpath: /dev/disk/by-id/nvme-VENDOR_MODEL_SERIALNUMBER
+    cephBlockPools:
+      - name: ceph-blockpool
+        spec:
+          failureDomain: host
+          replicated:
+            # Three copies, on three separate hosts. A machine can be lost with
+            # the data still redundant afterwards, rather than down to its last
+            # copy and one failure from gone.
+            #
+            # It costs capacity: of 835 GiB raw, about 264 GiB is usable at
+            # three copies against 396 at two. Raised now because it is nearly
+            # free while the pool is empty -- doing it later means moving
+            # everything that has accumulated by then.
+            #
+            # (An earlier note here said Ceph defaults min_size to 2 for a
+            # size-2 pool. It does not: the default is size - size/2, which is
+            # 1, so that pool kept accepting writes on a single copy.)
+            size: 3
+            requireSafeReplicaSize: true
+        storageClass:
+          enabled: true
+          name: ceph-block
+          isDefault: true
+          reclaimPolicy: Delete
+          allowVolumeExpansion: true
+          # Overriding cephBlockPools replaces the chart's default entry
+          # outright, and its default carried these. Without them the
+          # StorageClass is created with only clusterID and pool, the
+          # provisioner is handed no credentials, and every PVC stays Pending
+          # while csi-rbdplugin logs `provided secret is empty` -- which is
+          # visible nowhere except that container's own log.
+          #
+          # Rook writes both secrets into its own namespace; they are named
+          # here rather than templated because this release is pinned to
+          # rook-ceph.
+          parameters:
+            imageFormat: "2"
+            imageFeatures: layering
+            csi.storage.k8s.io/provisioner-secret-name: rook-csi-rbd-provisioner
+            csi.storage.k8s.io/provisioner-secret-namespace: rook-ceph
+            csi.storage.k8s.io/controller-expand-secret-name: rook-csi-rbd-provisioner
+            csi.storage.k8s.io/controller-expand-secret-namespace: rook-ceph
+            csi.storage.k8s.io/controller-publish-secret-name: rook-csi-rbd-provisioner
+            csi.storage.k8s.io/controller-publish-secret-namespace: rook-ceph
+            csi.storage.k8s.io/node-stage-secret-name: rook-csi-rbd-node
+            csi.storage.k8s.io/node-stage-secret-namespace: rook-ceph
+            # xfs is not recommended here: the OSD shares the node with any
+            # pod mounting the volume, and that can deadlock.
+            csi.storage.k8s.io/fstype: ext4
+    # No shared filesystem and no object storage yet. Both cost a pod each and
+    # nothing asks for them.
+    cephFileSystems: []
+    cephObjectStores: []
